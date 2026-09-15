@@ -55,6 +55,7 @@ def load_profiles(path: Path) -> list[Profile]:
         home_raw = str(item.get("home", "")).strip()
         if not home_raw:
             raise ValueError(f"profile {name!r} is missing home")
+        # Resolving SOURCE homes is intentional: symlinks should point at the real files.
         home = Path(os.path.expandvars(os.path.expanduser(home_raw))).resolve()
         profiles.append(Profile(name=name, home=home))
         seen.add(name)
@@ -109,16 +110,41 @@ def add_tree(profile: Profile, source_name: str, destination_root: Path, manifes
     return count
 
 
-def rebuild(profiles: list[Profile], root: Path) -> None:
-    root = root.resolve()
-    # Refuse suspicious destinations. This command deletes and rebuilds only its own
-    # generated federation tree.
-    if root == Path.home() or root == Path("/") or len(root.parts) < 4:
-        raise ValueError(f"refusing unsafe federation root: {root}")
+def output_path(path: Path) -> Path:
+    """Return an absolute output path without following a pre-existing symlink."""
+    expanded = Path(os.path.expandvars(os.path.expanduser(str(path))))
+    return Path(os.path.abspath(expanded))
 
+
+def remove_generated_path(path: Path) -> None:
+    """Remove only the path itself; never follow a symlink to its target."""
+    if path.is_symlink():
+        path.unlink()
+    elif path.exists():
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+
+def validate_output_root(root: Path) -> None:
+    home = Path.home().absolute()
+    root = root.absolute()
+    if root == Path("/") or root == home:
+        raise ValueError(f"refusing unsafe federation root: {root}")
+    if len(root.parts) < 3:
+        raise ValueError(f"refusing overly broad federation root: {root}")
+
+
+def rebuild(profiles: list[Profile], root: Path) -> None:
+    root = output_path(root)
+    validate_output_root(root)
+
+    # IMPORTANT: do not call root.resolve(). If an attacker or accident replaced the
+    # federation path with a symlink, resolve() would turn a harmless unlink into a delete
+    # operation against the symlink target. We deliberately operate on the pathname itself.
     staging = root.with_name(root.name + ".staging")
-    if staging.exists() or staging.is_symlink():
-        shutil.rmtree(staging)
+    remove_generated_path(staging)
     staging.mkdir(parents=True)
 
     sessions = staging / "sessions"
@@ -147,8 +173,7 @@ def rebuild(profiles: list[Profile], root: Path) -> None:
         encoding="utf-8",
     )
 
-    if root.exists() or root.is_symlink():
-        shutil.rmtree(root)
+    remove_generated_path(root)
     staging.rename(root)
 
     print(f"Federation rebuilt: {root}")
@@ -172,7 +197,8 @@ def init_config(path: Path) -> None:
 
 
 def status(root: Path) -> None:
-    manifest_path = root.expanduser() / MANIFEST
+    root = output_path(root)
+    manifest_path = root / MANIFEST
     if not manifest_path.exists():
         print("No federation manifest found.")
         return
@@ -182,9 +208,10 @@ def status(root: Path) -> None:
     broken = 0
     for item in files:
         by_profile[item["profile"]] = by_profile.get(item["profile"], 0) + 1
-        if not Path(item["destination"]).exists():
+        destination = Path(item["destination"])
+        if not destination.is_symlink() or not destination.exists():
             broken += 1
-    print(f"Federation: {root.expanduser()}")
+    print(f"Federation: {root}")
     for name, count in sorted(by_profile.items()):
         print(f"  {name}: {count} sessions")
     print(f"  broken links: {broken}")
@@ -205,9 +232,9 @@ def main() -> int:
             init_config(args.config.expanduser())
         elif args.command == "sync":
             profiles = load_profiles(args.config.expanduser())
-            rebuild(profiles, args.root.expanduser())
+            rebuild(profiles, args.root)
         elif args.command == "status":
-            status(args.root.expanduser())
+            status(args.root)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
