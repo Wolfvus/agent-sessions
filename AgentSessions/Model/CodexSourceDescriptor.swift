@@ -63,8 +63,9 @@ extension SessionSourceDescriptor {
                     SessionArchiveBackfill.minimalSession(source: .codex, id: sessionID, url: upstreamURL)
                 }
             ),
-            supportsResume: true,
-            resumeAgentLabel: "Codex CLI",
+            // Lite is a history browser. Do not expose command-launching resume actions.
+            supportsResume: false,
+            resumeAgentLabel: nil,
             otherAgentPill: nil
         )
     }()
