@@ -60,9 +60,8 @@ extension SessionSourceDescriptor {
                         ?? SessionArchiveBackfill.minimalSession(source: .antigravity, id: sessionID, url: upstreamURL)
                 }
             ),
-            // Lite is a history browser. Do not expose command-launching resume actions.
-            supportsResume: false,
-            resumeAgentLabel: nil,
+            supportsResume: true,
+            resumeAgentLabel: "Antigravity CLI",
             otherAgentPill: PillSpec(color: Color(nsColor: SessionSourceRegistry.resolvedBrandAccent(for: .antigravity)),
                                      shortcut: "3")
         )
